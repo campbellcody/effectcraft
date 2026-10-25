@@ -20,3 +20,8 @@ harfrust = { workspace = true }
 unicode-bidi = "0.3.18"
 # UAX #14 line breaking (Apache-2.0).
 unicode-linebreak = "0.1.5"
+
+# This startup check needs a fresh process: neighboring tests initialize the global font scan.
+[[test]]
+name = "system_font_menu"
+path = "tests/it/system_font_menu.rs"

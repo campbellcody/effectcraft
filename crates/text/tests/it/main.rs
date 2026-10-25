@@ -1,5 +1,4 @@
-//! The crate's integration tests, one binary (each module is a former `tests/<name>.rs`).
+//! General integration cases. The system-font startup check runs in its own test binary.
 
 mod script_fallback;
-mod system_font_menu;
 mod vertical_punctuation;
