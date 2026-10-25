@@ -195,12 +195,21 @@ fn uncompressed_rgba_straight() {
 
 #[test]
 fn uncompressed_with_pcm_audio() {
-    let d = out_dir("uncompressed-audio");
+    check_pcm_audio(OutputFormat::Uncompressed);
+}
+
+#[test]
+fn uncompressed16_with_pcm_audio() {
+    check_pcm_audio(OutputFormat::Uncompressed16);
+}
+
+fn check_pcm_audio(format: OutputFormat) {
+    let d = out_dir(&format!("uncompressed-audio-{format:?}"));
     let wav = d.join("tone.wav");
     write_tone(&wav, 1.0);
     let (p, cid) = project(Some(&wav));
     let pool = MediaPool::new();
-    let om = OutputModule { audio: AudioOutput::Auto, audio_format: AudioFormat::S24, ..OutputModule::for_format(OutputFormat::Uncompressed) };
+    let om = OutputModule { audio: AudioOutput::Auto, audio_format: AudioFormat::S24, ..OutputModule::for_format(format) };
     let path = d.join("comp.mov");
     assert!(run(&p, cid, &pool, &om, &path).audio);
     let bytes = std::fs::read(&path).expect("read");
@@ -218,5 +227,79 @@ fn uncompressed_with_pcm_audio() {
         let left = rms(pcm.iter().step_by(2).copied().collect());
         // A sine of amplitude 0.5 → RMS ≈ 0.354.
         assert!((left - 0.3536).abs() < 0.01, "left RMS {left}");
+    }
+}
+
+/// An independent float-render reference plus an external decoder: both must retain the
+/// low eight bits, alpha association, frame order, and odd-sized frame geometry.
+#[test]
+fn uncompressed16_precision_channels_and_external_decode() {
+    use effectcraft_export::render_queue::AlphaMode;
+    use effectcraft_project::BitDepth;
+    use effectcraft_render::{NoFootage, RenderOpts, Renderer};
+
+    let (mut p, cid) = project(None);
+    p.settings.bit_depth = BitDepth::Bpc32;
+    for item in p.items.values_mut() {
+        if let ItemKind::Solid(s) = &mut item.kind {
+            s.color = [0.12345, 0.34567, 0.56789];
+        }
+    }
+    p.comp_mut(cid).unwrap().layers[0].props.prop_mut("transform/opacity").unwrap().value = effectcraft_keyframe::Value::Scalar(43.21);
+    let renderer = Renderer::new(&p, &NoFootage, RenderOpts::default());
+    for (name, channels, alpha_mode) in [
+        ("rgb", Channels::Rgb, AlphaMode::Straight),
+        ("straight", Channels::Rgba, AlphaMode::Straight),
+        ("premultiplied", Channels::Rgba, AlphaMode::Premultiplied),
+        ("alpha", Channels::Alpha, AlphaMode::Straight),
+    ] {
+        let dir = out_dir(&format!("uncompressed16-{name}"));
+        let path = dir.join("comp.mov");
+        let om = OutputModule { channels, alpha_mode, ..OutputModule::for_format(OutputFormat::Uncompressed16) };
+        let report = run(&p, cid, &NoFootage, &om, &path);
+        assert_eq!((report.width, report.height, report.frames), (W, H, FRAMES));
+        let bytes = std::fs::read(&path).unwrap();
+        let mov = filmcraft_isobmff::open(bytes.as_slice()).unwrap();
+        let track = mov.tracks.iter().find(|t| t.kind == TrackKind::Video).unwrap();
+        assert_eq!(track.entries[0].format.0, *b"b64a");
+        assert_eq!(track.entries[0].video.as_ref().unwrap().depth, 64);
+        assert_eq!(track.samples.len(), FRAMES as usize);
+        let mut stored_rgba = Vec::new();
+        for (k, sample) in track.samples.iter().enumerate() {
+            assert_eq!(sample.duration, 1);
+            assert_eq!(sample.size, W * H * 8);
+            let data = &bytes[sample.offset as usize..][..sample.size as usize];
+            let img = renderer.comp_frame(cid, FrameRate::new(10, 1).tick_of(k as i64));
+            let background = p.comp(cid).unwrap().background;
+            for (src, pixel) in img.data.iter().zip(data.as_chunks::<8>().0) {
+                let c: Vec<u16> = pixel.as_chunks::<2>().0.iter().map(|b| u16::from_be_bytes(*b)).collect();
+                let rgba = [c[1], c[2], c[3], c[0]];
+                let a = src[3] as f64;
+                let expected = match channels {
+                    Channels::Rgb => [
+                        src[0] as f64 + background[0] as f64 * (1.0 - a),
+                        src[1] as f64 + background[1] as f64 * (1.0 - a),
+                        src[2] as f64 + background[2] as f64 * (1.0 - a),
+                        1.0,
+                    ],
+                    Channels::Rgba if alpha_mode == AlphaMode::Straight && a > 0.0 => [src[0] as f64 / a, src[1] as f64 / a, src[2] as f64 / a, a],
+                    Channels::Rgba => src.map(f64::from),
+                    Channels::Alpha => [a, a, a, 1.0],
+                };
+                for (got, want) in rgba.into_iter().zip(expected) {
+                    let want = (want.clamp(0.0, 1.0) * 65535.0).round() as u16;
+                    assert!(got.abs_diff(want) <= 1, "{name}, frame {k}: {got} != {want}");
+                    stored_rgba.extend_from_slice(&got.to_le_bytes());
+                }
+            }
+        }
+        let samples: Vec<u16> = stored_rgba.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect();
+        assert!(samples.iter().any(|v| v % 257 != 0), "must retain precision beyond 8 bits");
+        if let Some(streams) = ffprobe_streams(&path) {
+            assert_eq!(streams.trim(), format!("rawvideo|video|b64a|{W}|{H}|rgba64be"));
+            let out = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&path).args(["-f", "rawvideo", "-pix_fmt", "rgba64le", "-"]).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            assert_eq!(out.stdout, stored_rgba, "external decode must preserve all 16 bits ({name})");
+        }
     }
 }

@@ -178,6 +178,7 @@ pub fn output_bits(format: OutputFormat, depth: effectcraft_project::BitDepth) -
         OutputFormat::ExrSequence => 32,
         OutputFormat::PngSequence | OutputFormat::TiffSequence => project.min(16),
         OutputFormat::ProRes => 10,
+        OutputFormat::Uncompressed16 => 16,
         OutputFormat::Wav | OutputFormat::Aiff => 16,
         _ => 8,
     }
@@ -208,6 +209,7 @@ pub fn bytes_per_frame(om: &OutputModule, w: u32, h: u32, fps: f64) -> f64 {
             let bpp = if om.channels == effectcraft_project::render_queue::Channels::Rgba { 4 } else { 3 };
             ((w as u64 * bpp).next_multiple_of(2) * h as u64) as f64
         }
+        OutputFormat::Uncompressed16 => w as f64 * h as f64 * 8.0,
         OutputFormat::WebM => mbps(8.0) * px / fps,
         OutputFormat::Gif => w as f64 * h as f64 * 0.5,
         OutputFormat::Wav | OutputFormat::Aiff => om.audio_sample_rate as f64 * 4.0 / fps,

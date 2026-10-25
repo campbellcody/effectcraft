@@ -798,3 +798,24 @@ fn replace_with_precomp_swaps_every_use_of_the_item_for_one_new_comp() {
     assert!(s.execute("file.replaceWithPrecomp", json!({"item": other.0})).is_err());
     assert!(s.execute("file.replaceWithPrecomp", json!({"item": 999_999})).is_err());
 }
+
+#[test]
+fn uncompressed16_output_is_agent_drivable_and_estimated_at_full_precision() {
+    use effectcraft_project::BitDepth;
+    use effectcraft_project::render_queue::{OutputFormat, OutputModule};
+    let mut s = session();
+    solid(&mut s, "#ff0000");
+    s.execute("renderQueue.add", json!({"format": "uncompressed16", "channels": "rgba", "output": "Intermediate.mov"})).unwrap();
+    let item = &s.project.render_queue[0];
+    assert_eq!(item.output.format, OutputFormat::Uncompressed16);
+    assert_eq!(crate::render_queue::bytes_per_frame(&item.output, 33, 20, 24.0), 5280.0);
+    for depth in [BitDepth::Bpc8, BitDepth::Bpc16, BitDepth::Bpc32] {
+        assert_eq!(crate::render_queue::output_bits(item.output.format, depth), 16);
+    }
+    let old = OutputModule::for_format(OutputFormat::Uncompressed);
+    assert_eq!(crate::render_queue::bytes_per_frame(&old, 33, 20, 24.0), 2000.0);
+    s.execute("renderQueue.setOutputModule", json!({"index": 1, "format": "uncompressed", "channels": "rgb"})).unwrap();
+    assert_eq!(s.project.render_queue[0].output.format, OutputFormat::Uncompressed);
+    s.execute("renderQueue.setOutputModule", json!({"index": 1, "format": "b64a", "channels": "alpha"})).unwrap();
+    assert_eq!(s.project.render_queue[0].output.format, OutputFormat::Uncompressed16);
+}

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~30 points of "ready for real work" and ~350–620 h away
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (open-issue count, crash list and localization share re-audited against `upstream/main` 470ea7a3) · **Target:** Adobe After Effects 2026 (26.5.0.89)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-25 · **Change:** minor (16-bpc uncompressed QuickTime export, part of gap 22; readiness estimates unchanged) · **Target:** Adobe After Effects 2026 (26.5.0.89)
 
 EffectCraft aims to do what After Effects does, with the same panels, menus and behaviour, written
 from scratch in Rust. This page is the one-page summary; the evidence is in
@@ -116,6 +116,10 @@ Ranked; detail in [docs/roadmap.md](docs/roadmap.md) and [docs/gaps.md](docs/gap
 Come tell us what matters most to you on [Discord](https://discord.gg/artcraft).
 
 ## Progress log
+
+- 2026-10-25: Uncompressed 16-bpc QuickTime (`b64a`) export preserves rendered precision without
+  an 8-bit intermediate, with RGB, straight/premultiplied alpha, alpha-only output and PCM audio.
+  Part of gap 22; AVI and lossless-compressed intermediate codecs remain open.
 
 - 2026-10-16: Convert To Bezier Path turns a shape layer's Rectangle, Ellipse or Polystar
   path into an editable Path 1 with the same geometry, as After Effects does; it used to

@@ -1,5 +1,5 @@
 //! Movie export: FilmCraft H.264, HEVC (`effectcraft-hevcenc`) and AV1 (`effectcraft-av1enc`)
-//! → MP4 (+ AAC), ProRes and uncompressed `raw ` → MOV (+ PCM), muxed by
+//! → MP4 (+ AAC), ProRes and uncompressed `raw ` / `b64a` → MOV (+ PCM), muxed by
 //! FilmCraft's ISO BMFF / QuickTime writer.
 
 use std::io::Write;
@@ -28,6 +28,7 @@ pub(crate) struct Packet {
 
 pub(crate) trait VideoEncoder {
     fn sample_entry(&self) -> SampleEntry;
+    /// Packed RGBA8, or big-endian RGBA16 for the uncompressed 16-bpc encoder.
     fn encode(&mut self, rgba: &[u8], index: u64) -> Result<Vec<Packet>>;
     fn flush(&mut self) -> Result<Vec<Packet>>;
     /// Edit-list media start (B-frame delay) in the track timescale.
@@ -253,7 +254,7 @@ pub(crate) async fn movie(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut St
     let rate = job.settings.rate(comp);
     let fmt = job.output.format;
     let channels = match job.output.channels {
-        Channels::Rgba if !matches!(fmt, OutputFormat::ProRes | OutputFormat::Uncompressed) => Channels::Rgb,
+        Channels::Rgba if !matches!(fmt, OutputFormat::ProRes | OutputFormat::Uncompressed | OutputFormat::Uncompressed16) => Channels::Rgb,
         c => c,
     };
     let mut venc: Box<dyn VideoEncoder> = match fmt {
@@ -261,20 +262,27 @@ pub(crate) async fn movie(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut St
         OutputFormat::Hevc => Box::new(crate::hevc_av1::Hevc::new(w, h, rate, job.output)?),
         OutputFormat::Av1 => Box::new(crate::hevc_av1::Av1::new(w, h, rate, job.output)?),
         OutputFormat::Uncompressed => Box::new(crate::uncompressed::Raw::new(w, h, channels == Channels::Rgba)?),
+        OutputFormat::Uncompressed16 => Box::new(crate::uncompressed::Raw::new16(w, h)?),
         _ => Box::new(ProRes::new(w, h, job.output.prores_profile, if channels == Channels::Alpha { Channels::Rgb } else { channels })),
     };
-    let brand = if matches!(fmt, OutputFormat::ProRes | OutputFormat::Uncompressed) { Brand::Mov } else { Brand::Mp4 };
-    let batch = batch_size();
-    let render = |_: u64, img: effectcraft_raster::Image| -> Vec<u8> { job.pixels(&img, comp, channels, w, h) };
+    let brand = if matches!(fmt, OutputFormat::ProRes | OutputFormat::Uncompressed | OutputFormat::Uncompressed16) { Brand::Mov } else { Brand::Mp4 };
+    // Full-precision frames are large: keep just one rendered/packed frame in flight.
+    let batch = if fmt == OutputFormat::Uncompressed16 { 1 } else { batch_size() };
+    let render = |_: u64, img: effectcraft_raster::Image| -> Result<Vec<u8>> {
+        if fmt == OutputFormat::Uncompressed16 {
+            crate::uncompressed::pixels16(&img, comp.background, channels, job.output.alpha_mode)
+        } else {
+            Ok(job.pixels(&img, comp, channels, w, h))
+        }
+    };
 
     // Encode the first batch before creating tracks: encoders finalise their config on frame 1.
     let first_end = batch.min(st.total);
-    let first: Vec<Vec<u8>> = job.frames(comp, (0..first_end).collect(), render).await;
+    let first: Vec<Result<Vec<u8>>> = job.frames(comp, (0..first_end).collect(), render).await;
     let mut pending = Vec::new();
-    for (k, px) in first.iter().enumerate() {
-        pending.extend(venc.encode(px, k as u64)?);
+    for (k, px) in first.into_iter().enumerate() {
+        pending.extend(venc.encode(&px?, k as u64)?);
     }
-    drop(first);
     st.advance(first_end)?;
 
     let path = job.place(job.path, 1);
@@ -358,9 +366,9 @@ pub(crate) async fn movie(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut St
     let mut i = first_end;
     while i < total {
         let end = (i + batch).min(total);
-        let frames: Vec<Vec<u8>> = job.frames(comp, (i..end).collect(), render).await;
-        for (k, px) in frames.iter().enumerate() {
-            let ps = venc.encode(px, i + k as u64)?;
+        let frames: Vec<Result<Vec<u8>>> = job.frames(comp, (i..end).collect(), render).await;
+        for (k, px) in frames.into_iter().enumerate() {
+            let ps = venc.encode(&px?, i + k as u64)?;
             write_video(&mut mux, ps)?;
         }
         write_audio_until(&mut mux, frame_end_time(end), &mut cursor)?;

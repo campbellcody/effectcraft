@@ -257,7 +257,7 @@ fn output_menu(it: &RenderQueueItem, available: &[OutputFormat], templates: &Ren
         }
         v.push((mark(o.audio_channels == 1, "Audio Channels: Mono"), json!({"audioChannels": "mono"})));
         v.push((mark(o.audio_channels != 1, "Audio Channels: Stereo"), json!({"audioChannels": "stereo"})));
-        if matches!(o.format, OutputFormat::ProRes | OutputFormat::Uncompressed | OutputFormat::Wav | OutputFormat::Aiff) {
+        if matches!(o.format, OutputFormat::ProRes | OutputFormat::Uncompressed | OutputFormat::Uncompressed16 | OutputFormat::Wav | OutputFormat::Aiff) {
             for f in [AudioFormat::S16, AudioFormat::S24, AudioFormat::F32] {
                 v.push((mark(o.audio_format == f, &tr_args("Sample Format: {}", &[&(f.label())])), json!({"audioFormat": f.label()})));
             }
